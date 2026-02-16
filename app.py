@@ -1,16 +1,21 @@
 """
-FastAPI app combining all modalities with NO policy enforcement.
-Intentional vulnerability code for combined multimodal AI safety testing.
+FastAPI app combining all modalities with REAL OpenAI API calls.
+NO policy enforcement - intentional vulnerability code for combined multimodal AI safety testing.
 """
 
+import base64
 import logging
-from fastapi import FastAPI, File, Form, UploadFile
+import os
+import tempfile
+from openai import OpenAI
+from fastapi import FastAPI, File, Form, UploadFile, Body
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import settings  # noqa: F401
-from agent_runner import run_agent
+# Load API key from env with hardcoded fallback
+API_KEY = os.environ.get("OPENAI_API_KEY", "sk-proj-FAKE-MULTI-combined1234567890abcdef")
+client = OpenAI(api_key=API_KEY)
 
-# Log everything including PII - no sanitization
+# Debug logging - no sanitization
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
@@ -25,73 +30,185 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Hardcoded API key - never do this in production
-API_KEY = "sk-proj-FAKE-MULTI-combined1234567890abcdef"
-
 
 @app.post("/text")
-async def text_endpoint(text: str = Form(...)):
+async def text_endpoint(body: dict):
     """Accepts text, sends to LLM, no validation."""
-    # Log everything including PII
-    logger.info(f"Received text from user: {text}")
-    logger.debug(f"Full request payload: {text}")
+    message = body.get("message", "")
+    logger.info(f"Received text: {message}")
     # No validation - send directly to LLM
-    response = f"Processed (no validation): {text[:100]}..."
-    return {"status": "ok", "response": response}
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": message}],
+    )
+    text = resp.choices[0].message.content
+    return {"status": "ok", "response": text}
 
 
 @app.post("/image")
-async def image_endpoint(image: UploadFile = File(...)):
-    """Accepts image upload, sends to vision model, no content check."""
-    # Log everything including filename
-    content = await image.read()
-    logger.info(f"Received image: {image.filename}, size: {len(content)}")
-    logger.debug(f"Image bytes length: {len(content)}")
-    # No content check - send directly to vision model
-    return {"status": "ok", "message": "Image processed without content check"}
+async def image_endpoint(body: dict = Body(...)):
+    """Accepts image URL, sends to vision model, no content moderation."""
+    image_url = body.get("image_url", "")
+    logger.info(f"Received image_url: {image_url}")
+    # No content moderation - send directly to vision API
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+    )
+    text = resp.choices[0].message.content
+    return {"status": "ok", "response": text}
 
 
 @app.post("/audio")
 async def audio_endpoint(audio: UploadFile = File(...)):
-    """Accepts audio, transcribes, no filtering."""
-    # Log everything
+    """Accepts audio file, transcribes via Whisper, no filtering."""
     logger.info(f"Received audio: {audio.filename}")
     content = await audio.read()
-    logger.debug(f"Audio bytes length: {len(content)}")
     # No filtering - transcribe directly
-    return {"status": "ok", "message": "Audio transcribed without filtering"}
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        with open(tmp_path, "rb") as f:
+            transcript = client.audio.transcriptions.create(model="whisper-1", file=f)
+        return {"status": "ok", "transcript": transcript.text}
+    finally:
+        os.unlink(tmp_path)
+
+
+def _execute_command(cmd: str) -> str:
+    """Execute shell command - no restriction."""
+    import subprocess
+    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    return proc.stdout or proc.stderr or ""
+
+
+def _read_file(path: str) -> str:
+    """Read file from path - no restriction."""
+    with open(path, "r") as f:
+        return f.read()
 
 
 @app.post("/agent")
-async def agent_endpoint(goal: str = Form(...)):
-    """Invokes an autonomous agent with tools, no restrictions."""
-    # Log everything including potentially dangerous goals
-    logger.info(f"Agent goal received: {goal}")
-    logger.debug(f"Full goal: {goal}")
-    # No restrictions - invoke agent
-    result = run_agent(goal)
-    return {"status": "ok", "result": result}
+async def agent_endpoint(body: dict = Body(...)):
+    """Invokes autonomous agent with tools, no restrictions."""
+    goal = body.get("goal", "")
+    logger.info(f"Agent goal: {goal}")
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_command",
+                "description": "Execute a shell command",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read contents of a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+        },
+    ]
+
+    messages = [{"role": "user", "content": goal}]
+
+    while True:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            tools=tools,
+        )
+        msg = resp.choices[0].message
+        messages.append(msg)
+
+        if not msg.tool_calls:
+            final_result = msg.content or ""
+            break
+
+        for tc in msg.tool_calls:
+            name = tc.function.name
+            import json
+            args = json.loads(tc.function.arguments)
+            if name == "execute_command":
+                result = _execute_command(args.get("cmd", ""))
+            elif name == "read_file":
+                result = _read_file(args.get("path", ""))
+            else:
+                result = "Unknown tool"
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result,
+            })
+
+    return {"status": "ok", "result": final_result}
 
 
 @app.post("/multimodal")
 async def multimodal_endpoint(
     text: str = Form(None),
-    image: UploadFile = File(None),
+    image_url: str = Form(None),
     audio: UploadFile = File(None),
 ):
-    """Accepts mixed input (text + image + audio), processes all together."""
-    # Log everything
-    logger.info(f"Multimodal request - text: {text}, image: {image}, audio: {audio}")
+    """Processes text + optional image_url + optional audio through OpenAI, combines results."""
+    logger.info(f"Multimodal - text: {text}, image_url: {image_url}, audio: {audio}")
+    results = []
+
     if text:
-        logger.debug(f"Text content: {text}")
-    if image:
-        logger.info(f"Image: {image.filename}")
-        await image.read()
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": text}],
+        )
+        results.append({"type": "text", "result": resp.choices[0].message.content})
+
+    if image_url:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image."},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ],
+                }
+            ],
+        )
+        results.append({"type": "image", "result": resp.choices[0].message.content})
+
     if audio:
-        logger.info(f"Audio: {audio.filename}")
-        await audio.read()
-    # No policy enforcement - process all together
-    return {"status": "ok", "message": "Multimodal processed without policy enforcement"}
+        content = await audio.read()
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            with open(tmp_path, "rb") as f:
+                transcript = client.audio.transcriptions.create(model="whisper-1", file=f)
+            results.append({"type": "audio", "result": transcript.text})
+        finally:
+            os.unlink(tmp_path)
+
+    return {"status": "ok", "results": results}
 
 
 if __name__ == "__main__":
