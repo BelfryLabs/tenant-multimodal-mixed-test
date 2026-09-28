@@ -20,3 +20,5 @@ jobs:
           echo "SHA: ${{ github.sha }}"
       - name: Simulate CI scan trigger
         run: echo "Belfry static scan initiated"
+      - name: Note service health route
+        run: echo "Service exposes GET /health for liveness; vulnerability test routes are unchanged"

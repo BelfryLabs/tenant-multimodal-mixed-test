@@ -31,6 +31,12 @@ app.add_middleware(
 )
 
 
+@app.get("/health")
+async def health():
+    """Liveness check. Does not call a model or touch other routes."""
+    return {"status": "ok", "service": "multimodal-api"}
+
+
 @app.post("/text")
 async def text_endpoint(body: dict):
     """Accepts text, sends to LLM, no validation."""
