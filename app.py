@@ -11,6 +11,8 @@ from openai import OpenAI
 from fastapi import FastAPI, File, Form, UploadFile, Body
 from fastapi.middleware.cors import CORSMiddleware
 
+from plugin_loader import router as plugin_router
+
 # Load API key from env with hardcoded fallback
 API_KEY = os.environ.get("OPENAI_API_KEY", "sk-proj-FAKE-MULTI-combined1234567890abcdef")
 client = OpenAI(api_key=API_KEY)
@@ -20,6 +22,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Multimodal API - No Policy Enforcement")
+app.include_router(plugin_router)
 
 # CORS allow all origins - no restrictions
 app.add_middleware(
