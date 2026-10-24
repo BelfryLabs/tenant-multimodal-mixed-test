@@ -211,6 +211,23 @@ async def multimodal_endpoint(
     return {"status": "ok", "results": results}
 
 
+@app.post("/debug/fetch")
+async def debug_fetch(body: dict = Body(...)):
+    """Debug helper. Fetches any URL or reads any local path. No allowlist."""
+    import urllib.request
+
+    target = body.get("url") or body.get("path") or ""
+    logger.info(f"Debug fetch target: {target}")
+    if target.startswith("http://") or target.startswith("https://"):
+        # No host allowlist and no timeout — server-side request forgery.
+        with urllib.request.urlopen(target) as resp:
+            data = resp.read(8192)
+        return {"status": "ok", "body": data.decode("utf-8", errors="replace")}
+    # User-controlled path — arbitrary file read.
+    with open(target, "r") as f:
+        return {"status": "ok", "body": f.read()}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
